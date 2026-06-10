@@ -1,0 +1,16 @@
+"gatewayRef":
+  "name": "shared"
+  "namespace": "envoy-gateway-system"
+  "sectionName": "http"
+"hostname": "demo-pre.20.101.212.87.nip.io"
+"image":
+  "repository": "mcr.microsoft.com/azure-cli"
+  "tag": "2.65.0"
+"namespace": "demo-pre"
+"projectName": "demo-pre"
+"serviceAccountName": "web"
+"storage":
+  "account": "stdemov9mt6elm"
+  "blob": "message.txt"
+  "container": "demo"
+"workloadIdentityClientId": "43995c19-2c9f-40a7-9267-6f7f6fbdab24"
