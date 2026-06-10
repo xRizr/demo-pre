@@ -1,0 +1,131 @@
+name: Deploy to AKS (Helm + Gateway API)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - values.yaml
+      - chart/**
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "[DEMO] OIDC env-y + zdekodowany JWT (slajd 11)"
+        run: |
+          set -euo pipefail
+          echo "::group::1) Env-y wstrzyknięte do runnera przez GitHub schedulera"
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL    = ${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN  = (length=${#ACTIONS_ID_TOKEN_REQUEST_TOKEN}, ephemeralny, masowany w logach)"
+          echo "::endgroup::"
+
+          echo "::group::2) GET \$URL&audience=... z bearer \$TOKEN  ->  JWT"
+          JWT=$(curl -sS \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            -H "Accept: application/json; api-version=2.0" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange" \
+            | jq -r '.value')
+          if [ -z "${JWT}" ] || [ "${JWT}" = "null" ]; then
+            echo "ERROR: nie udało się pobrać JWT od GitHub OIDC issuera"
+            exit 1
+          fi
+          echo "::add-mask::${JWT}"
+          echo "JWT length: ${#JWT} chars · podpisany kluczem token.actions.githubusercontent.com"
+          echo "::endgroup::"
+
+          echo "::group::3) Zdekodowany payload (TO Entra widzi i waliduje wg FIC)"
+          echo "${JWT}" | python3 -c "$(cat <<'PY'
+          import sys, json, base64
+          parts = sys.stdin.read().strip().split('.')
+          payload = parts[1] + '=' * (-len(parts[1]) % 4)
+          data = json.loads(base64.urlsafe_b64decode(payload))
+          print(json.dumps(data, indent=2, ensure_ascii=False))
+          PY
+          )"
+          echo "::endgroup::"
+
+          echo "-> azure/login w następnym kroku wyśle TEN JWT do Entry jako client_assertion."
+          echo "   FIC zwaliduje iss/sub/aud/podpis (slajd 11). Jak gra -> token Azure."
+
+      - name: Azure login (OIDC, no secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.2.17
+
+      - name: Set up kubeconfig for AKS
+        uses: azure/aks-set-context@v4
+        with:
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+          resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
+          admin: false
+          use-kubelogin: true
+
+      - name: Helm upgrade --install
+        run: |
+          helm upgrade --install "${{ vars.PROJECT_NAME }}" ./chart \
+            --namespace "${{ vars.K8S_NAMESPACE }}" \
+            --values ./values.yaml \
+            --wait --timeout 180s
+
+      - name: Show resulting endpoints
+        run: |
+          kubectl get -n "${{ vars.K8S_NAMESPACE }}" deployment,svc,httproute
+
+      - name: Smoke test — verify the app responds
+        run: |
+          set -euo pipefail
+          HOSTNAME="$(yq '.hostname' values.yaml)"
+          URL="http://${HOSTNAME}"
+          echo "Probing ${URL} ..."
+          for i in $(seq 1 30); do
+            CODE=$(curl -sS -o /tmp/body -w "%{http_code}" -m 5 "${URL}" || echo "000")
+            if [ "${CODE}" = "200" ] && grep -q "Zero secrets" /tmp/body; then
+              echo ""
+              echo "============================================"
+              echo "  Deployment successful!"
+              echo "  ${URL}"
+              echo "============================================"
+              exit 0
+            fi
+            echo "Attempt ${i}/30: HTTP ${CODE} (waiting for HTTPRoute + Envoy reconcile)..."
+            sleep 5
+          done
+          echo ""
+          echo "FAILED — ${URL} did not return 200 with expected body in 2.5 minutes."
+          echo "Last HTTP code: ${CODE}"
+          echo "---- curl -v ----"
+          curl -v "${URL}" || true
+          echo "---- HTTPRoute ----"
+          kubectl -n "${{ vars.K8S_NAMESPACE }}" describe httproute || true
+          echo "---- Pods ----"
+          kubectl -n "${{ vars.K8S_NAMESPACE }}" describe pod || true
+          exit 1
+
+      - name: Clean up kubeconfig + Azure session
+        if: always()
+        run: |
+          rm -f "${KUBECONFIG}"           2>/dev/null || true
+          rm -f "${HOME}/.kube/config"    2>/dev/null || true
+          az logout                        2>/dev/null || true
+          az account clear                 2>/dev/null || true
+          echo "Credentials wiped."

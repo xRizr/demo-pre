@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Values.projectName }}
+spec:
+  # parentRefs binds this HTTPRoute to the shared Gateway in envoy-gateway-system.
+  # The Gateway's listener has allowedRoutes.namespaces.from=All + a ReferenceGrant
+  # so HTTPRoutes from project namespaces are accepted.
+  parentRefs:
+    - name: {{ .Values.gatewayRef.name }}
+      namespace: {{ .Values.gatewayRef.namespace }}
+      sectionName: {{ .Values.gatewayRef.sectionName }}
+  hostnames:
+    - {{ .Values.hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ .Values.projectName }}
+          port: 80

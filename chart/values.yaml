@@ -1,0 +1,34 @@
+# Default values — overridden per project by values.yaml committed by Terraform
+# (terraform/examples/04-live-demo).
+#
+# At deploy time, GitHub Actions runs:
+#   helm upgrade --install <projectName> ./chart -n <namespace> --values ./values.yaml
+# where ./values.yaml is the per-project file at the repo root.
+
+projectName: example
+namespace: default
+serviceAccountName: web
+
+# UAMI app client_id — pod uses this to call Entra via Workload Identity Federation.
+# Empty by default; per-project values.yaml MUST provide it.
+workloadIdentityClientId: ""
+
+image:
+  repository: mcr.microsoft.com/azure-cli
+  tag: "2.65.0"
+
+# Storage account/container/blob the pod reads at runtime via Workload Identity.
+storage:
+  account: ""
+  container: ""
+  blob: ""
+
+# Hostname for Gateway API HTTPRoute, matched against the shared Gateway's listener.
+# Convention: "<projectName>.<gateway_ip>.nip.io"
+hostname: ""
+
+# Reference to the shared Gateway provisioned by 01-shared-platform.
+gatewayRef:
+  name: shared
+  namespace: envoy-gateway-system
+  sectionName: http

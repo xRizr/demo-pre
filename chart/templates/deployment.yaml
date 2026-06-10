@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.projectName }}
+  labels:
+    app: {{ .Values.projectName }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.projectName }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.projectName }}
+        # Tells the workload-identity webhook to inject the federated token.
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      containers:
+        - name: web
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "Logging in via AKS Workload Identity (no stored secret)..."
+              az login --service-principal \
+                --username "$AZURE_CLIENT_ID" \
+                --tenant "$AZURE_TENANT_ID" \
+                --federated-token "$(cat "$AZURE_FEDERATED_TOKEN_FILE")" \
+                --allow-no-subscriptions >/dev/null
+              az storage blob download \
+                --account-name "{{ .Values.storage.account }}" \
+                --container-name "{{ .Values.storage.container }}" \
+                --name "{{ .Values.storage.blob }}" \
+                --auth-mode login --no-progress --file /tmp/v >/dev/null 2>&1 || true
+              VALUE="$(cat /tmp/v 2>/dev/null || echo '(value not readable yet - Azure RBAC may still be propagating; restart the pod in a few minutes)')"
+              mkdir -p /content
+              printf '<!doctype html><meta charset=utf-8><title>Azure Identity demo</title><body style="font-family:sans-serif;max-width:760px;margin:60px auto;line-height:1.6"><h1>It works. Zero secrets.</h1><p>Deployed by GitHub Actions via OIDC (namespace-scoped Azure RBAC), exposed via Gateway API (shared Envoy Gateway).</p><p>The value below was fetched <b>at runtime by the pod via AKS Workload Identity</b> - no key, no connection string:</p><blockquote style="font-size:1.4em;color:#0B5394">%s</blockquote><p>Two identities, one federation mechanism, nothing stored.</p></body>' "$VALUE" > /content/index.html
+              cd /content && exec python3 -m http.server 80
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

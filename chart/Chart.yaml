@@ -1,0 +1,11 @@
+apiVersion: v2
+name: azure-identity-demo
+description: |
+  Azure Identity demo app. Pod reads a blob from Storage using AKS Workload Identity
+  (no stored secret) and serves it on Gateway API via HTTPRoute (shared Envoy Gateway).
+
+  All per-project values come from values.yaml — owner repo only carries config,
+  not Kubernetes manifests.
+type: application
+version: 0.1.0
+appVersion: "1.0"

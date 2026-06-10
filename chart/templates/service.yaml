@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.projectName }}
+spec:
+  # ClusterIP: Gateway API HTTPRoute routes external traffic via shared Envoy Gateway.
+  # No per-project LoadBalancer IP needed.
+  type: ClusterIP
+  selector:
+    app: {{ .Values.projectName }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

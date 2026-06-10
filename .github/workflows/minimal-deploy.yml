@@ -1,0 +1,60 @@
+name: Deploy to AKS (Helm + Gateway API)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, no secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # kubelogin converts the kubeconfig token; pin a version (no GH API call).
+      - name: Install kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.2.17
+
+      - name: Set up kubeconfig for AKS
+        uses: azure/aks-set-context@v4
+        with:
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+          resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
+          admin: false
+          use-kubelogin: true
+
+      - name: Helm upgrade --install
+        run: |
+          helm upgrade --install "${{ vars.PROJECT_NAME }}" ./chart \
+            --namespace "${{ vars.K8S_NAMESPACE }}" \
+            --values ./values.yaml \
+            --wait --timeout 180s
+
+      - name: Show resulting endpoints
+        run: |
+          kubectl get -n "${{ vars.K8S_NAMESPACE }}" deployment,svc,httproute
+
+      - name: Clean up kubeconfig + Azure session
+        if: always()
+        run: |
+          rm -f "${KUBECONFIG}"           2>/dev/null || true
+          rm -f "${HOME}/.kube/config"    2>/dev/null || true
+          az logout                        2>/dev/null || true
+          az account clear                 2>/dev/null || true
+          echo "Credentials wiped."
